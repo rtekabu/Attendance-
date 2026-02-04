@@ -8,7 +8,7 @@
 <style>
   body { font-family: Arial; background: #f5f7fa; margin: 0; }
   header { background: #002b5c; color: white; padding: 15px; display: flex; justify-content: space-between; align-items: center; }
-  header img { height: 50px; }
+  header img { height: 65px; }
   nav { width: 200px; float: left; background: #fff; height: 100vh; padding: 10px; box-shadow: 2px 0 5px #ccc; }
   nav button { display:block; width:100%; margin-bottom:5px; padding:8px; cursor:pointer; }
   main { margin-left: 210px; padding: 20px; }
@@ -18,8 +18,10 @@
   .status-Present { background: forestgreen; color: white; }
   .status-Late { background: tomato; color: white; }
   .status-Leave-Early { background: orange; color: white; }
+  .status-Half-Day { background: gold; color: black; }
   .status-Absent { background: gray; color: white; }
   button.downloadBtn { margin: 10px 0; padding: 8px 12px; background:#002b5c; color:white; border:none; cursor:pointer; border-radius:4px; }
+  select, input[type=number] { padding: 4px; margin-right: 10px; }
 </style>
 </head>
 <body>
@@ -30,7 +32,7 @@
     <small>National Statistics Office</small>
   </div>
   <div>
-    <img src="MFED.jpg" alt="Logo">
+    <img src="MFED.jpg" alt="MFED Logo">
   </div>
 </header>
 
@@ -60,7 +62,6 @@
     <label>Year:</label>
     <input type="number" id="year" value=""><br><br>
 
-    <!-- Download button here -->
     <button class="downloadBtn" onclick="downloadExcel()">Download Excel</button>
 
     <table id="attendanceTable">
@@ -69,14 +70,20 @@
       </thead>
       <tbody></tbody>
     </table>
-    <canvas id="stackedChart" height="300"></canvas>
+    <canvas id="stackedChart" height="50"></canvas>
   </div>
 </main>
 
 <script>
 // ---------------- USERS ----------------
-const users = [];
-for(let i=1;i<=24;i++){ users.push({user:`emp${i.toString().padStart(2,'0')}`, password:"staff123"}); }
+const users = [
+  {user:"admin", password:"Admin@2025!", role:"admin"},
+  ...Array.from({length:25}, (_,i)=>({
+    user:`emp${String(i+1).padStart(2,'0')}`,
+    password:`staff${i+1}`,
+    role:"staff"
+  }))
+];
 
 // ---------------- DATA ----------------
 let currentUser = null;
@@ -119,7 +126,6 @@ function login(){
 
     const todayStr = new Date().toISOString().split("T")[0];
     if(!attendance.find(r=>r.Employee===currentUser && r.Date===todayStr)){
-      // Request GPS automatically
       getGPS(gps=>{
         attendance.push({
           Date: todayStr,
@@ -152,7 +158,6 @@ function logout(){
     showTab('login');
 
     if(record){
-      // Request GPS automatically
       getGPS(gps=>{
         record.CheckOut = new Date().toLocaleTimeString();
         record.GPSOut = gps;
@@ -167,20 +172,26 @@ function logout(){
 // ---------------- STATUS CALC ----------------
 function calculateStatus(checkIn, checkOut){
   if(!checkIn && !checkOut) return "Absent";
-
   const inTime = checkIn ? new Date("1970-01-01 " + checkIn) : null;
   const outTime = checkOut ? new Date("1970-01-01 " + checkOut) : null;
 
   const officeStart = new Date("1970-01-01 09:00");
   const officeEnd = new Date("1970-01-01 17:30");
   const lateTime = new Date("1970-01-01 10:00");
-  const leaveEarlyOut = new Date("1970-01-01 11:00");
-  const leaveEarlyIn = new Date("1970-01-01 08:00");
+  const leaveEarlyStart = new Date("1970-01-01 08:00");
+  const leaveEarlyEnd = new Date("1970-01-01 14:00");
+  const halfDayAM = new Date("1970-01-01 12:00");
+  const halfDayPM = new Date("1970-01-01 14:00");
 
   if(inTime && outTime){
+    // Present
     if(inTime <= officeStart && outTime >= officeEnd) return "Present";
+    // Late
     if(inTime >= lateTime) return "Late";
-    if(inTime <= leaveEarlyIn && outTime <= leaveEarlyOut) return "Leave Early";
+    // Leave Early
+    if(inTime <= leaveEarlyStart && outTime <= leaveEarlyEnd) return "Leave-Early";
+    // Half-Day: Morning or Afternoon
+    if((inTime <= halfDayAM && outTime <= halfDayPM) || (inTime >= halfDayAM && outTime >= officeEnd)) return "Half-Day";
   }
   if(inTime && !outTime) return "Late";
   return "Absent";
@@ -190,29 +201,39 @@ function calculateStatus(checkIn, checkOut){
 function updateDashboard(){
   const tbody = document.querySelector("#attendanceTable tbody");
   tbody.innerHTML="";
-  attendance.forEach(r=>{
+  const selectedMonth = monthSelect.value;
+  const selectedYear = document.getElementById("year").value;
+
+  const filtered = attendance.filter(r=>{
+    const d = new Date(r.Date);
+    return (d.getMonth()===monthNames.indexOf(selectedMonth) && d.getFullYear()==selectedYear);
+  });
+
+  filtered.forEach(r=>{
     r.Status = calculateStatus(r.CheckIn,r.CheckOut);
+    if(currentUser!=="admin" && r.Employee!==currentUser) return; // non-admin sees only self
     const tr = document.createElement("tr");
     const statusClass = r.Status.replace(/\s+/g,'-');
     tr.innerHTML = `<td>${r.Date}</td><td>${r.Employee}</td><td>${r.CheckIn}</td><td>${r.CheckOut}</td><td class="status-${statusClass}">${r.Status}</td><td>${r.Remark}</td><td>${r.GPSIn||''}</td><td>${r.GPSOut||''}</td>`;
     tbody.appendChild(tr);
   });
-  drawChart();
+  drawChart(filtered);
   saveData();
 }
 
 // ---------------- CHART ----------------
-function drawChart(){
+function drawChart(data){
   const ctx = document.getElementById('stackedChart').getContext('2d');
   const counts = {};
-  attendance.forEach(r=>{
-    if(!counts[r.Employee]) counts[r.Employee] = {"Present":0,"Late":0,"Leave Early":0,"Absent":0};
+  data.forEach(r=>{
+    if(!counts[r.Employee]) counts[r.Employee] = {"Present":0,"Late":0,"Leave-Early":0,"Half-Day":0,"Absent":0};
     counts[r.Employee][r.Status] = (counts[r.Employee][r.Status]||0)+1;
   });
   const labels = Object.keys(counts);
   const presentData = labels.map(l=>counts[l]["Present"]||0);
   const lateData = labels.map(l=>counts[l]["Late"]||0);
-  const leaveData = labels.map(l=>counts[l]["Leave Early"]||0);
+  const leaveData = labels.map(l=>counts[l]["Leave-Early"]||0);
+  const halfDayData = labels.map(l=>counts[l]["Half-Day"]||0);
   const absentData = labels.map(l=>counts[l]["Absent"]||0);
 
   if(window.myChart) window.myChart.destroy();
@@ -224,6 +245,7 @@ function drawChart(){
         {label:'Present', data: presentData, backgroundColor:'forestgreen'},
         {label:'Late', data: lateData, backgroundColor:'tomato'},
         {label:'Leave Early', data: leaveData, backgroundColor:'orange'},
+        {label:'Half-Day', data: halfDayData, backgroundColor:'gold'},
         {label:'Absent', data: absentData, backgroundColor:'gray'}
       ]
     },
@@ -243,9 +265,6 @@ function downloadExcel(){
 function saveData(){
   localStorage.setItem("attendance", JSON.stringify(attendance));
 }
-
 </script>
 </body>
 </html>
-
-
